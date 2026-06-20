@@ -2,6 +2,8 @@
 
 A MelonLoader (IL2CPP) mod for **Schedule I** that makes dead bodies actually matter.
 
+> 🛟 **Need help or found a bug?** Get support at [support.doodesch.de](https://support.doodesch.de).
+
 In vanilla, police and citizens walk over a corpse like it isn't there, and a body drags around as if it weighs as
 much as a plastic bag. Loose Ends fixes both:
 
@@ -9,8 +11,8 @@ much as a plastic bag. Loose Ends fixes both:
    police called, police enter the game's real **"Investigating"** pursuit state. A body that is hidden from sight -
    in a dumpster, behind a wall, indoors, underwater, in bushes - is never seen, so nothing happens. That is the whole
    point: hide your bodies or face the heat.
-2. **Corpses are heavier.** A carried corpse is made about 5x heavier by default (configurable), adding weight and
-   stress to disposal.
+2. **Corpses are heavier.** While you carry a body you move noticeably slower (and the body drags more sluggishly),
+   scaled by a configurable multiplier - adding weight and stress to hauling a corpse to its hiding spot.
 
 Everything is configurable in the in-game **Mod Manager / Phone App** settings, including how punishing the police
 response is.
@@ -63,8 +65,10 @@ response is.
 - `AttributeUnknownToLocalPlayer` (true) - blame the local player for an unattributed body in single-player.
 
 **Weight**
-- `CorpseWeightMultiplier` (5, range 1-20) - how heavy a carried corpse feels.
-- `WeightMode` (0 = DragForce feel only, 1 = real Rigidbody mass, 2 = both). DragForce is safest (leaves throwing vanilla).
+- `CorpseWeightMultiplier` (5, range 1-20) - how heavy a carried corpse feels. Primarily slows you down while carrying
+  (x5 ~ half speed, x10 ~ a third, floored so you can always crawl); also makes the body itself drag more sluggishly.
+- `WeightMode` (0 = DragForce, 1 = Rigidbody mass, 2 = both) - the secondary drag-physics tweak on the body. DragForce
+  makes it lag behind; Mass affects throw/collisions (the drag spring is mass-independent). The carry slowdown applies regardless.
 
 ## Building
 

@@ -170,11 +170,14 @@ namespace LooseEnds.Config
 
             // ----- weight -----
             _weightMultiplier = Create("CorpseWeightMultiplier", 5f, "Carried corpse weight x",
-                "How much heavier a carried corpse feels (default 5). 1 = vanilla (drags like a plastic bag). Clamped 1-20.",
+                "How heavy a carried corpse feels (default 5). Primarily slows you down while carrying a body (x5 ~ half " +
+                "speed, x10 ~ a third, floored so you can always crawl) and makes the body drag more sluggishly. " +
+                "1 = vanilla. Clamped 1-20.",
                 new MelonLoader.Preferences.ValueRange<float>(1f, 20f));
             _weightMode = Create("WeightMode", (int)WeightMode.DragForce, "Weight mode (0 DragForce, 1 Mass, 2 Both)",
-                "0 = sluggish drag feel only (safest, leaves throwing vanilla). 1 = real rigidbody mass (physically " +
-                "correct). 2 = both.",
+                "Secondary drag-physics tweak on the body itself (the carry slowdown applies regardless). 0 = DragForce " +
+                "(body lags behind, safest). 1 = Rigidbody mass (affects throw/collisions; the drag spring is " +
+                "mass-independent). 2 = both.",
                 new MelonLoader.Preferences.ValueRange<int>(0, 2));
 
 #if DEBUG

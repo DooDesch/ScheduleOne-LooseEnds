@@ -1,26 +1,31 @@
 using System.Collections.Generic;
 using UnityEngine;
 using Il2CppScheduleOne.Dragging;   // Draggable
+using Il2CppScheduleOne.Tools;      // FloatStack
 using LooseEnds.Config;
 using LooseEnds.Detection;
 
 namespace LooseEnds.Weight
 {
     /// <summary>
-    /// Makes a carried corpse heavier than the vanilla "plastic bag". Applied while a corpse draggable is held and
-    /// restored exactly on drop, so the change is scoped to carrying and never permanently mutates the object. Keeps
-    /// its own small cache keyed by the Draggable instance id so it is independent of the witness system (weight is a
-    /// local drag-feel for the carrier, who may be a client). Only touches the per-object draggable - never the global
-    /// DragManager - so other draggables (trash, items) are unaffected.
+    /// Makes a carried corpse feel heavy. The drag itself uses ForceMode.Acceleration (mass-independent), so the only
+    /// thing that really sells the weight is slowing the CARRIER down while they haul a body - that is the stress the
+    /// design wants. So the primary effect is a labelled multiplicative entry pushed onto the local player's
+    /// MoveSpeedMultiplierStack while a corpse is held (removed on drop). As a secondary touch the corpse's own
+    /// Draggable is made laggier (lower DragForceMultiplier). Scoped to carrying; restored exactly on release. Keeps its
+    /// own cache keyed by Draggable instance id so it is independent of the witness system.
     /// </summary>
     internal static class CorpseWeight
     {
+        private const string SlowLabel = "LooseEnds_CorpseWeight";
+
         private struct Saved
         {
             public float DragMult;
             public Rigidbody Rb;
             public float Mass;
             public bool HasMass;
+            public bool Slowed;
         }
 
         private static readonly Dictionary<int, Saved> _active = new Dictionary<int, Saved>();
@@ -36,16 +41,21 @@ namespace LooseEnds.Weight
             try { id = d.GetInstanceID(); } catch { return; }
             if (_active.ContainsKey(id)) return;   // already scaled (idempotent)
 
-            if (!IsCorpseDraggable(d)) return;
+            bool isCorpse = IsCorpseDraggable(d);
+            bool localDragger = IsLocalDragger(d);
+#if DEBUG
+            Core.LogDebug($"[Weight] drag start id={id} corpse={isCorpse} localDragger={localDragger} mult={mult}");
+#endif
+            if (!isCorpse) return;
 
             WeightMode mode = Preferences.Weight;
             Saved saved = default;
             try
             {
+                // Secondary: make the body itself lag behind the carry point.
                 saved.DragMult = d.DragForceMultiplier;
                 if (mode == WeightMode.DragForce || mode == WeightMode.Both)
                 {
-                    // Lower drag force -> the body lags behind the carry point -> feels heavy. Clamp so it stays movable.
                     d.DragForceMultiplier = Mathf.Max(0.05f, saved.DragMult / mult);
                 }
                 if (mode == WeightMode.Mass || mode == WeightMode.Both)
@@ -56,12 +66,16 @@ namespace LooseEnds.Weight
                         saved.Rb = rb;
                         saved.Mass = rb.mass;
                         saved.HasMass = true;
-                        rb.mass = rb.mass * mult;
+                        rb.mass = rb.mass * mult;   // affects throw weight + collisions (drag itself is mass-independent)
                     }
                 }
+
+                // Primary, actually-noticeable effect: slow the local carrier while hauling the body.
+                if (localDragger && ApplyCarrySlowdown(mult)) saved.Slowed = true;
+
                 _active[id] = saved;
 #if DEBUG
-                Core.LogDebug($"[Weight] corpse drag start id={id} mode={mode} x{mult} (dragMult {saved.DragMult} -> {d.DragForceMultiplier}, mass {(saved.HasMass ? saved.Mass.ToString() : "n/a")})");
+                Core.LogDebug($"[Weight] applied id={id} dragMult->{d.DragForceMultiplier} slowedCarrier={saved.Slowed}");
 #endif
             }
             catch { /* leave it vanilla on any failure */ }
@@ -77,9 +91,49 @@ namespace LooseEnds.Weight
             {
                 d.DragForceMultiplier = s.DragMult;
                 if (s.HasMass && s.Rb != null) s.Rb.mass = s.Mass;
+                if (s.Slowed) RemoveCarrySlowdown();
             }
             catch { /* object may be gone */ }
             _active.Remove(id);
+        }
+
+        /// <summary>Push a labelled multiplicative slowdown onto the local player's move-speed stack.</summary>
+        private static bool ApplyCarrySlowdown(float mult)
+        {
+            try
+            {
+                PlayerMovement pm = PlayerSingleton<PlayerMovement>.Instance;
+                if (pm == null) return false;
+                FloatStack stack = pm.MoveSpeedMultiplierStack;
+                if (stack == null) return false;
+                // mult 1 -> 1.0 (no slow), 5 -> 0.50, 10 -> 0.31, 20 -> 0.17. Floored so you can always crawl.
+                float factor = Mathf.Clamp(1f / (1f + (mult - 1f) * 0.25f), 0.15f, 1f);
+                stack.Add(new FloatStack.StackEntry(SlowLabel, factor, FloatStack.EStackMode.Multiplicative, 0));
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static void RemoveCarrySlowdown()
+        {
+            try
+            {
+                PlayerMovement pm = PlayerSingleton<PlayerMovement>.Instance;
+                if (pm != null && pm.MoveSpeedMultiplierStack != null)
+                    pm.MoveSpeedMultiplierStack.Remove(SlowLabel);
+            }
+            catch { /* ignore */ }
+        }
+
+        private static bool IsLocalDragger(Draggable d)
+        {
+            try
+            {
+                Player local = Player.Local;
+                Player cur = d.CurrentDragger;
+                return local != null && cur != null && cur.GetInstanceID() == local.GetInstanceID();
+            }
+            catch { return false; }
         }
 
         /// <summary>True if this draggable is a dead NPC's ragdoll (not a normal pickup-able item).</summary>
@@ -112,6 +166,10 @@ namespace LooseEnds.Weight
             return false;
         }
 
-        internal static void Clear() => _active.Clear();
+        internal static void Clear()
+        {
+            RemoveCarrySlowdown();   // safety: never leave the player stuck slow after a scene change
+            _active.Clear();
+        }
     }
 }
