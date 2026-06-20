@@ -1,0 +1,10 @@
+{
+  "name": "LooseEnds",
+  "version_number": "1.0.0",
+  "description": "Citizens and police react to corpses they see (call police / investigate), and bodies are heavier. Hide your bodies.",
+  "website_url": "https://github.com/DooDesch/ScheduleOne-LooseEnds",
+  "dependencies": [],
+  "contributors": [
+    "DooDesch"
+  ]
+}
