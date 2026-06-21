@@ -44,11 +44,21 @@ namespace LooseEnds.Killer
             return null;
         }
 
-        /// <summary>The confirmed killer for a dead NPC, or null if unknown (environmental / NPC-vs-NPC death).</summary>
+        /// <summary>
+        /// The player responsible for a downed NPC, or null if unknown (environmental / NPC-vs-NPC). Prefers the
+        /// confirmed killer (promoted on death), but falls back to a recent player attacker - so a body the player only
+        /// knocked out (which never goes through Die/RecordKill) is still attributed to whoever assaulted it.
+        /// </summary>
         internal static Player GetKiller(NPC npc)
         {
             if (npc == null) return null;
-            if (_killer.TryGetValue(npc.GetInstanceID(), out Player p) && p != null) return p;
+            int id = npc.GetInstanceID();
+            if (_killer.TryGetValue(id, out Player p) && p != null) return p;
+            if (_lastAttacker.TryGetValue(id, out Attack a) && a.Player != null
+                && Time.time - a.Time <= AttributionWindowSeconds)
+            {
+                return a.Player;
+            }
             return null;
         }
 

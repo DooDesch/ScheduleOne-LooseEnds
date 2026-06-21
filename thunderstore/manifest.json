@@ -1,6 +1,6 @@
 {
   "name": "LooseEnds",
-  "version_number": "1.0.0",
+  "version_number": "1.1.0",
   "website_url": "https://github.com/DooDesch-Mods/ScheduleOne-LooseEnds",
   "description": "NPCs who see a corpse react (citizens call the police, police investigate) and carried bodies are heavier. Hide your bodies.",
   "dependencies": [

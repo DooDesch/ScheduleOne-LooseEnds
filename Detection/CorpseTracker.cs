@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using LooseEnds.Config;
 using LooseEnds.Killer;
+using LooseEnds.Weight;
 
 namespace LooseEnds.Detection
 {
@@ -102,6 +103,9 @@ namespace LooseEnds.Detection
             for (int i = 0; i < _toRemove.Count; i++)
             {
                 int id = _toRemove[i];
+                // If this body was being carried and just got revived in place, the game disabled its Draggable without
+                // firing StopDragging - restore its physics now so the heavy-corpse modifier never leaks onto the living NPC.
+                CorpseWeight.RestoreForNpcId(id);
                 _corpses.Remove(id);
                 KillerRegistry.ForgetId(id);
             }
@@ -116,6 +120,20 @@ namespace LooseEnds.Detection
         internal static void Clear()
         {
             _corpses.Clear();
+        }
+
+        /// <summary>
+        /// Mark every tracked corpse as already discovered + dispatched so none re-triggers a new pursuit. Called when
+        /// the player is arrested - the bodies still exist (we do NOT clear the set), they just won't cause further
+        /// police responses, so a single arrest settles the whole spree.
+        /// </summary>
+        internal static void ResolveAll()
+        {
+            foreach (CorpseRecord rec in _corpses.Values)
+            {
+                rec.Discovered = true;
+                rec.Dispatched = true;
+            }
         }
     }
 }

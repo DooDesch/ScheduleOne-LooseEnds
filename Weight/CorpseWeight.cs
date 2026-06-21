@@ -1,34 +1,36 @@
 using System.Collections.Generic;
 using UnityEngine;
 using Il2CppScheduleOne.Dragging;   // Draggable
-using Il2CppScheduleOne.Tools;      // FloatStack
 using LooseEnds.Config;
 using LooseEnds.Detection;
 
 namespace LooseEnds.Weight
 {
     /// <summary>
-    /// Makes a carried corpse feel heavy. The drag itself uses ForceMode.Acceleration (mass-independent), so the only
-    /// thing that really sells the weight is slowing the CARRIER down while they haul a body - that is the stress the
-    /// design wants. So the primary effect is a labelled multiplicative entry pushed onto the local player's
-    /// MoveSpeedMultiplierStack while a corpse is held (removed on drop). As a secondary touch the corpse's own
-    /// Draggable is made laggier (lower DragForceMultiplier). Scoped to carrying; restored exactly on release. Keeps its
-    /// own cache keyed by Draggable instance id so it is independent of the witness system.
+    /// Makes a dragged body (dead OR knocked-out) feel heavy to PULL - the body resists, instead of slowing the
+    /// player (which felt bad). While a body is carried we weaken its follow spring (lower DragForceMultiplier so it
+    /// lags behind the carry point), crank its linear/angular drag (it moves sluggishly and stops fast), and raise its
+    /// mass a little (heavier to throw/shove). All cached per-Draggable and restored exactly on drop, so the effect is
+    /// scoped to carrying and never leaks. Independent of the witness system; applies to any draggable body.
     /// </summary>
     internal static class CorpseWeight
     {
-        private const string SlowLabel = "LooseEnds_CorpseWeight";
-
         private struct Saved
         {
+            public Draggable D;     // the draggable we modified (to restore DragForceMultiplier without being handed it)
+            public int NpcId;       // owning NPC instance id (to restore proactively when that NPC is un-tracked)
             public float DragMult;
             public Rigidbody Rb;
+            public float Drag;
+            public float AngularDrag;
             public float Mass;
-            public bool HasMass;
-            public bool Slowed;
+            public bool HasRb;
         }
 
         private static readonly Dictionary<int, Saved> _active = new Dictionary<int, Saved>();
+
+        /// <summary>How many bodies are currently weighted (i.e. being carried). For the debug HUD.</summary>
+        internal static int ActiveCount => _active.Count;
 
         internal static void OnStartDragging(Draggable d)
         {
@@ -39,43 +41,43 @@ namespace LooseEnds.Weight
 
             int id;
             try { id = d.GetInstanceID(); } catch { return; }
-            if (_active.ContainsKey(id)) return;   // already scaled (idempotent)
+            if (_active.ContainsKey(id)) return;   // already weighted (idempotent)
 
-            bool isCorpse = IsCorpseDraggable(d);
-            bool localDragger = IsLocalDragger(d);
+            bool isBody = IsBodyDraggable(d);
 #if DEBUG
-            Core.LogDebug($"[Weight] drag start id={id} corpse={isCorpse} localDragger={localDragger} mult={mult}");
+            Core.LogDebug($"[Weight] drag start id={id} body={isBody} mult={mult}");
 #endif
-            if (!isCorpse) return;
+            if (!isBody) return;
 
-            WeightMode mode = Preferences.Weight;
-            Saved saved = default;
+            Saved s = default;
             try
             {
-                // Secondary: make the body itself lag behind the carry point.
-                saved.DragMult = d.DragForceMultiplier;
-                if (mode == WeightMode.DragForce || mode == WeightMode.Both)
+                s.D = d;
+                try { NPC owner = d.GetComponentInParent<NPC>(); s.NpcId = owner != null ? owner.GetInstanceID() : 0; }
+                catch { s.NpcId = 0; }
+
+                // The drag spring uses ForceMode.Acceleration (mass-independent), so the felt weight comes from a
+                // weaker follow (DragForceMultiplier) plus real resistance (Rigidbody.drag). Mass only adds throw/
+                // collision heft.
+                s.DragMult = d.DragForceMultiplier;
+                d.DragForceMultiplier = Mathf.Max(0.05f, s.DragMult / mult);
+
+                Rigidbody rb = d.Rigidbody;
+                if (rb != null)
                 {
-                    d.DragForceMultiplier = Mathf.Max(0.05f, saved.DragMult / mult);
-                }
-                if (mode == WeightMode.Mass || mode == WeightMode.Both)
-                {
-                    Rigidbody rb = d.Rigidbody;
-                    if (rb != null)
-                    {
-                        saved.Rb = rb;
-                        saved.Mass = rb.mass;
-                        saved.HasMass = true;
-                        rb.mass = rb.mass * mult;   // affects throw weight + collisions (drag itself is mass-independent)
-                    }
+                    s.Rb = rb;
+                    s.HasRb = true;
+                    s.Drag = rb.drag;
+                    s.AngularDrag = rb.angularDrag;
+                    s.Mass = rb.mass;
+                    rb.drag = s.Drag + (mult - 1f) * 2f;             // strong linear resistance (the "heavy to pull" feel)
+                    rb.angularDrag = s.AngularDrag + (mult - 1f) * 2f;
+                    rb.mass = s.Mass * Mathf.Sqrt(mult);            // gentle - heavier to throw, not immovable
                 }
 
-                // Primary, actually-noticeable effect: slow the local carrier while hauling the body.
-                if (localDragger && ApplyCarrySlowdown(mult)) saved.Slowed = true;
-
-                _active[id] = saved;
+                _active[id] = s;
 #if DEBUG
-                Core.LogDebug($"[Weight] applied id={id} dragMult->{d.DragForceMultiplier} slowedCarrier={saved.Slowed}");
+                Core.LogDebug($"[Weight] applied id={id} dragMult->{d.DragForceMultiplier:F2} rbDrag->{(s.HasRb ? s.Rb.drag.ToString("F1") : "n/a")}");
 #endif
             }
             catch { /* leave it vanilla on any failure */ }
@@ -87,71 +89,71 @@ namespace LooseEnds.Weight
             int id;
             try { id = d.GetInstanceID(); } catch { return; }
             if (!_active.TryGetValue(id, out Saved s)) return;
-            try
-            {
-                d.DragForceMultiplier = s.DragMult;
-                if (s.HasMass && s.Rb != null) s.Rb.mass = s.Mass;
-                if (s.Slowed) RemoveCarrySlowdown();
-            }
-            catch { /* object may be gone */ }
+            RestoreEntry(s);
             _active.Remove(id);
+#if DEBUG
+            Core.LogDebug($"[Weight] drag stop id={id} restored");
+#endif
         }
 
-        /// <summary>Push a labelled multiplicative slowdown onto the local player's move-speed stack.</summary>
-        private static bool ApplyCarrySlowdown(float mult)
+        /// <summary>Put one body's physics back exactly as it was (idempotent, guarded against destroyed objects).</summary>
+        private static void RestoreEntry(Saved s)
         {
+            try { if (s.D != null) s.D.DragForceMultiplier = s.DragMult; } catch { /* draggable gone */ }
             try
             {
-                PlayerMovement pm = PlayerSingleton<PlayerMovement>.Instance;
-                if (pm == null) return false;
-                FloatStack stack = pm.MoveSpeedMultiplierStack;
-                if (stack == null) return false;
-                // mult 1 -> 1.0 (no slow), 5 -> 0.50, 10 -> 0.31, 20 -> 0.17. Floored so you can always crawl.
-                float factor = Mathf.Clamp(1f / (1f + (mult - 1f) * 0.25f), 0.15f, 1f);
-                stack.Add(new FloatStack.StackEntry(SlowLabel, factor, FloatStack.EStackMode.Multiplicative, 0));
-                return true;
+                if (s.HasRb && s.Rb != null)
+                {
+                    s.Rb.drag = s.Drag;
+                    s.Rb.angularDrag = s.AngularDrag;
+                    s.Rb.mass = s.Mass;
+                }
             }
-            catch { return false; }
+            catch { /* rigidbody gone */ }
         }
 
-        private static void RemoveCarrySlowdown()
+        /// <summary>
+        /// Proactively restore a carried body's physics when its NPC stops being a corpse (e.g. revived in place on a new
+        /// day). The game disables the ragdoll's Draggable WITHOUT firing StopDragging, so OnStopDragging never runs and
+        /// the heavy-physics modification would otherwise leak onto the now-living NPC. Called from the corpse-prune path.
+        /// </summary>
+        internal static void RestoreForNpcId(int npcId)
         {
-            try
+            if (npcId == 0 || _active.Count == 0) return;
+            List<int> hits = null;
+            foreach (KeyValuePair<int, Saved> kv in _active)
             {
-                PlayerMovement pm = PlayerSingleton<PlayerMovement>.Instance;
-                if (pm != null && pm.MoveSpeedMultiplierStack != null)
-                    pm.MoveSpeedMultiplierStack.Remove(SlowLabel);
+                if (kv.Value.NpcId != npcId) continue;
+                RestoreEntry(kv.Value);
+                (hits ??= new List<int>()).Add(kv.Key);
             }
-            catch { /* ignore */ }
+            if (hits != null) for (int i = 0; i < hits.Count; i++) _active.Remove(hits[i]);
         }
 
-        private static bool IsLocalDragger(Draggable d)
+        /// <summary>Restore every carried body's physics, then drop the cache. Use on save/scene reset so the originals
+        /// are never lost before they are applied (the cache is wiped at the sleep autosave AFTER NPCs revive).</summary>
+        internal static void RestoreAll()
         {
-            try
-            {
-                Player local = Player.Local;
-                Player cur = d.CurrentDragger;
-                return local != null && cur != null && cur.GetInstanceID() == local.GetInstanceID();
-            }
-            catch { return false; }
+            foreach (KeyValuePair<int, Saved> kv in _active) RestoreEntry(kv.Value);
+            _active.Clear();
         }
 
-        /// <summary>True if this draggable is a dead NPC's ragdoll (not a normal pickup-able item).</summary>
-        private static bool IsCorpseDraggable(Draggable d)
+        /// <summary>True if this draggable is a dead OR knocked-out NPC's ragdoll (both are draggable bodies).</summary>
+        private static bool IsBodyDraggable(Draggable d)
         {
-            // Primary: walk up to the owning NPC and check it's dead.
+            // Primary: walk up to the owning NPC and check it's down (dead or unconscious).
             try
             {
                 NPC npc = d.GetComponentInParent<NPC>();
                 if (npc != null)
                 {
                     NPCHealth h = npc.Health;
-                    if (h != null && h.IsDead) return true;
+                    if (h != null && (h.IsDead || h.IsKnockedOut)) return true;
                 }
             }
-            catch { /* fall through to the tracked-corpse match */ }
+            catch { /* fall through */ }
 
-            // Fallback: match against a tracked corpse's RagdollDraggable (covers a detached ragdoll object).
+            // Fallback: match a tracked corpse's ragdoll draggable (covers a detached ragdoll object).
             try
             {
                 foreach (CorpseRecord rec in CorpseTracker.Records)
@@ -166,10 +168,6 @@ namespace LooseEnds.Weight
             return false;
         }
 
-        internal static void Clear()
-        {
-            RemoveCarrySlowdown();   // safety: never leave the player stuck slow after a scene change
-            _active.Clear();
-        }
+        internal static void Clear() => _active.Clear();
     }
 }

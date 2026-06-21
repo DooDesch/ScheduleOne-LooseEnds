@@ -7,7 +7,7 @@ using LooseEnds.Killer;
 using LooseEnds.Networking;
 using LooseEnds.Reaction;
 
-[assembly: MelonInfo(typeof(LooseEnds.Core), "Loose Ends", "1.0.0", "DooDesch", null)]
+[assembly: MelonInfo(typeof(LooseEnds.Core), "Loose Ends", "1.1.0", "DooDesch", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 [assembly: MelonOptionalDependencies("ModManager&PhoneApp")]
 
@@ -27,6 +27,9 @@ namespace LooseEnds
         private bool _inWorld;
         private float _scanAccum;
         private float _reconcileAccum;
+        // Tracks Player.Local.CrimeData.MinsSinceLastArrested to detect an arrest (it resets toward 0 on arrest).
+        // -1 = not yet read.
+        private int _prevMinsSinceArrested = -1;
         private readonly System.Collections.Generic.List<Detection.CorpseRecord> _discovered = new System.Collections.Generic.List<Detection.CorpseRecord>();
         // Last logged activation state (-1 unknown, 0 off-pref, 1 off-MP, 2 not-authority, 3 active) - dedups re-arm logs.
         private int _activeLogState = -1;
@@ -52,9 +55,9 @@ namespace LooseEnds
             HookModManager();
 
 #if DEBUG
-            Log.Msg("Loose Ends v1.0.0 (DEBUG) - witness system + corpse weight. Dev probes in the config.");
+            Log.Msg("Loose Ends v1.1.0 (DEBUG) - witness system + corpse weight. Dev probes in the config.");
 #else
-            Log.Msg("Loose Ends v1.0.0 - witness system + corpse weight.");
+            Log.Msg("Loose Ends v1.1.0 - witness system + corpse weight.");
 #endif
         }
 
@@ -63,7 +66,9 @@ namespace LooseEnds
         {
             CorpseTracker.Clear();
             KillerRegistry.Clear();
-            Weight.CorpseWeight.Clear();
+            Weight.CorpseWeight.RestoreAll();   // restore (not just drop) carried-body physics before wiping the cache
+            // Drop the arrest-watcher edge state so a stale sample from a previous save/scene can't mis-compare.
+            if (Instance != null) Instance._prevMinsSinceArrested = -1;
         }
 
         private void HookModManager()
@@ -101,31 +106,51 @@ namespace LooseEnds
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
         {
             _inWorld = false;
+            WitnessStatus = "[not in world]";
             ResetState();
         }
+
+#if DEBUG
+        public override void OnGUI()
+        {
+            if (!_inWorld) return;
+            Debugging.WitnessHud.Draw();
+        }
+#endif
 
         /// <summary>
         /// Decides whether the witness system should be doing work this frame, honoring the master switch, the
         /// host-authority requirement (server only) and the co-op safety posture. Logs each state transition once.
         /// </summary>
+        /// <summary>Short human-readable activation state, surfaced by the debug HUD.</summary>
+        internal static string WitnessStatus = "init";
+#if DEBUG
+        /// <summary>Debug HUD on/off (toggle with F7).</summary>
+        internal static bool HudVisible = true;
+#endif
+
         private bool WitnessActive()
         {
             if (!Preferences.Enabled)
             {
+                WitnessStatus = "[OFF: disabled in settings]";
                 if (_activeLogState != 0) { Log.Msg("[Core] Disabled via preferences - running vanilla."); _activeLogState = 0; }
                 return false;
             }
             if (Net.IsCoop() && !Preferences.EnableInMultiplayer)
             {
+                WitnessStatus = "[OFF: co-op - set EnableInMultiplayer]";
                 if (_activeLogState != 1) { Log.Msg("[Core] Co-op session detected - witness system auto-DISABLED (set EnableInMultiplayer to opt in after a 2-player test)."); _activeLogState = 1; }
                 return false;
             }
             if (!Net.IsServer)
             {
                 // Not the authority (a connected client): the host runs detection + dispatch for everyone.
+                WitnessStatus = "[client - host runs detection]";
                 if (_activeLogState != 2) { Log.Msg("[Core] Not the network authority - witness detection runs on the host."); _activeLogState = 2; }
                 return false;
             }
+            WitnessStatus = "[ACTIVE]";
             if (_activeLogState != 3) { Log.Msg("[Core] Witness system ACTIVE."); _activeLogState = 3; }
             return true;
         }
@@ -139,7 +164,12 @@ namespace LooseEnds
 
 #if DEBUG
             HandleDebugCommands();
+            try { if (Input.GetKeyDown(KeyCode.F7)) HudVisible = !HudVisible; } catch { }
+            try { if (Input.GetKeyDown(KeyCode.F8)) Debugging.DebugArsenal.Give(); } catch { }
 #endif
+
+            // Arrest watcher (server only): one arrest settles the whole spree - clear killer attribution for all bodies.
+            CheckArrest();
 
             if (!WitnessActive())
             {
@@ -174,6 +204,37 @@ namespace LooseEnds
             WitnessTick();
         }
 
+        /// <summary>
+        /// Detects the local player being arrested and settles the whole spree: when MinsSinceLastArrested resets
+        /// toward 0 (it otherwise counts up one per in-game minute), the player was just arrested, so we clear the
+        /// killer registry and mark every tracked body resolved - a single arrest stops the player being re-arrested
+        /// for each NPC they downed. Server-only and fully guarded (Player.Local / CrimeData may be null early).
+        /// </summary>
+        private void CheckArrest()
+        {
+            try
+            {
+                if (!Net.IsServer) return;
+
+                Player local = Player.Local;
+                if (local == null) return;
+                PlayerCrimeData crimeData = local.CrimeData;
+                if (crimeData == null) return;
+
+                int mins = crimeData.MinsSinceLastArrested;
+
+                if (_prevMinsSinceArrested >= 0 && mins < _prevMinsSinceArrested)
+                {
+                    KillerRegistry.Clear();
+                    CorpseTracker.ResolveAll();
+                    Log?.Msg("[Core] Player arrested - cleared killer attribution for all bodies.");
+                }
+
+                _prevMinsSinceArrested = mins;
+            }
+            catch (Exception e) { Log?.Warning("[Core] arrest watcher failed: " + e.Message); }
+        }
+
         /// <summary>The throttled detection + reaction pass: scan for sightings, then run pending reactions.</summary>
         private void WitnessTick()
         {
@@ -188,6 +249,13 @@ namespace LooseEnds
 
             foreach (Detection.CorpseRecord rec in CorpseTracker.Records)
             {
+                // A call already in progress: advance it (connect -> scene, or witness silenced -> re-arm).
+                if (rec.Calling)
+                {
+                    ReactionDispatcher.UpdateCall(rec, now);
+                    continue;
+                }
+
                 if (!rec.Discovered) continue;
                 if (rec.Dispatched)
                 {
@@ -200,7 +268,7 @@ namespace LooseEnds
                     continue;
                 }
                 if (now - rec.FirstSeenTime < delay) continue;
-                ReactionDispatcher.TryDispatch(rec);
+                ReactionDispatcher.TryStartResponse(rec);
             }
         }
 
@@ -217,6 +285,7 @@ namespace LooseEnds
                 // Spawn a corpse first so a same-frame force-discover can act on it.
                 if (Preferences.ConsumeSpawnTestCorpse()) KillNearestNpc();
                 if (Preferences.ConsumeForceDiscover()) ForceDiscoverNearest();
+                if (Preferences.ConsumeGiveArsenal()) Debugging.DebugArsenal.Give();
             }
             catch (Exception e) { Log.Warning("[Core] debug command failed: " + e.Message); }
         }
@@ -244,8 +313,9 @@ namespace LooseEnds
                 best.Discovered = true;
                 best.FirstSeenTime = Time.time - 1000f;   // bypass the reaction delay
                 best.Dispatched = false;
+                best.Calling = false;
                 best.Discoverer = null;
-                ReactionDispatcher.TryDispatch(best);
+                ReactionDispatcher.TryStartResponse(best);
                 Log.Msg($"[Debug] force-discovered + dispatched corpse {best.Id}.");
             }
             catch (Exception e) { Log.Warning("[Core] ForceDiscoverNearest failed: " + e.Message); }

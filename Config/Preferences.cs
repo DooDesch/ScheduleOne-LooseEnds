@@ -3,34 +3,13 @@ using UnityEngine;
 
 namespace LooseEnds.Config
 {
-    /// <summary>How the police respond when a corpse is discovered.</summary>
-    internal enum ResponseMode
-    {
-        /// <summary>Apply heat to the killer-player (pursuit -> Investigating + PoliceCalled). Reliable default.</summary>
-        Hunt = 0,
-        /// <summary>Route officers to the body location only (experimental - the game API is player-keyed).</summary>
-        Scene = 1,
-        /// <summary>Scene first, escalate to Hunt once an officer reaches the body / the killer is also seen.</summary>
-        Escalating = 2,
-    }
-
-    /// <summary>What to scale to make a carried corpse heavier.</summary>
-    internal enum WeightMode
-    {
-        /// <summary>Divide Draggable.DragForceMultiplier - sluggish drag feel, leaves throw/NavMesh physics vanilla.</summary>
-        DragForce = 0,
-        /// <summary>Multiply Rigidbody.mass - physically correct, interacts with DragManager.MassInfluence.</summary>
-        Mass = 1,
-        /// <summary>Both of the above.</summary>
-        Both = 2,
-    }
-
     /// <summary>
     /// MelonPreferences wrapper. The category id is prefixed with the mod name ("LooseEnds_...") so it is
     /// auto-detected by the "Mod Manager &amp; Phone App" settings UI. Enum-like settings are stored int-backed
-    /// (typo-proof, clamps trivially) and exposed as the strong enum via the accessors. The realism of the police
-    /// response is fully user-configurable per the design (Hunt / Scene / Escalating, plus a "must also see the
-    /// player" gate). DEBUG-only probe entries register only in DEBUG builds.
+    /// (typo-proof, clamps trivially). The police response is a single behaviour: officers are sent to investigate the
+    /// SCENE (the body), and the game's own Investigating behaviour drives the search/escalate/timeout from there. A
+    /// "killer must also be seen" gate is available for a more vanilla feel. DEBUG-only probe entries register only in
+    /// DEBUG builds.
     /// </summary>
     internal static class Preferences
     {
@@ -51,30 +30,28 @@ namespace LooseEnds.Config
         private static MelonPreferences_Entry<float> _detectionRange;
         private static MelonPreferences_Entry<float> _reactionDelay;
         private static MelonPreferences_Entry<float> _observerCullRadius;
+        private static MelonPreferences_Entry<float> _bodySightRange;
+        private static MelonPreferences_Entry<float> _noticeRadius;
         private static MelonPreferences_Entry<float> _scanInterval;
         private static MelonPreferences_Entry<int> _maxRaycastsPerScan;
         private static MelonPreferences_Entry<bool> _reactToKnockedOut;
 
         // ----- response -----
-        private static MelonPreferences_Entry<int> _responseMode;
+        private static MelonPreferences_Entry<bool> _witnessCallsPolice;
         private static MelonPreferences_Entry<bool> _requirePlayerSeen;
         private static MelonPreferences_Entry<int> _pursuitLevel;
-        private static MelonPreferences_Entry<bool> _raiseLawIntensity;
-        private static MelonPreferences_Entry<bool> _useSetPursuitLevel;
-        private static MelonPreferences_Entry<bool> _usePoliceCalled;
-        private static MelonPreferences_Entry<bool> _useCitizenCallAnim;
         private static MelonPreferences_Entry<bool> _oncePerCorpse;
         private static MelonPreferences_Entry<float> _responseCooldown;
         private static MelonPreferences_Entry<bool> _attributeUnknownToLocal;
 
         // ----- weight -----
         private static MelonPreferences_Entry<float> _weightMultiplier;
-        private static MelonPreferences_Entry<int> _weightMode;
 
 #if DEBUG
         // One-shot "buttons" (toggle on -> action fires -> auto-reset to off) + dev toggles.
         private static MelonPreferences_Entry<bool> _btnForceDiscover;
         private static MelonPreferences_Entry<bool> _btnSpawnTestCorpse;
+        private static MelonPreferences_Entry<bool> _btnGiveArsenal;
         private static MelonPreferences_Entry<bool> _logWitnessScan;
         private static MelonPreferences_Entry<int> _forcePursuitLevel;
 #endif
@@ -122,6 +99,16 @@ namespace LooseEnds.Config
             _observerCullRadius = Create("ObserverCullRadius", 25f, "Observer cull radius (m)",
                 "Performance: only NPCs within this distance of a corpse are even considered as witnesses. Clamped 5-60.",
                 new MelonLoader.Preferences.ValueRange<float>(5f, 60f));
+            _bodySightRange = Create("BodySightRange", 12f, "Body sight range (m)",
+                "How far an NPC can NOTICE a body through their vision cone. A body lying flat on the ground is far less " +
+                "conspicuous than a standing person, so this is capped well below the NPC's normal sight range - otherwise " +
+                "a corpse in the open is spotted by anyone within ~25m and the response feels instant. Clamped 4-30.",
+                new MelonLoader.Preferences.ValueRange<float>(4f, 30f));
+            _noticeRadius = Create("NoticeRadius", 6f, "Close-range notice radius (m)",
+                "NPCs never look down at their feet, so a body lying flat is below their forward vision cone. Any living " +
+                "NPC within this radius with a clear line of sight (occlusion still respected) notices the body even if " +
+                "it is not in their cone - this is what makes someone standing over a corpse actually react. Clamped 2-15.",
+                new MelonLoader.Preferences.ValueRange<float>(2f, 15f));
             _scanInterval = Create("ScanIntervalSeconds", 0.4f, "Scan interval (s)",
                 "How often the witness scan runs. Lower = faster notice, slightly more cost. Clamped 0.1-2.",
                 new MelonLoader.Preferences.ValueRange<float>(0.1f, 2f));
@@ -132,11 +119,11 @@ namespace LooseEnds.Config
                 "OFF (default): only react to actually-dead NPCs. ON: also react to merely knocked-out NPCs.");
 
             // ----- response -----
-            _responseMode = Create("ResponseMode", (int)ResponseMode.Hunt, "Response mode (0 Hunt, 1 Scene, 2 Escalating)",
-                "0 = Hunt the killer (heat applied to the killer-player: pursuit -> Investigating + police dispatched; the " +
-                "reliable default). 1 = Scene investigation only (officers routed to the body; experimental). 2 = Escalating " +
-                "(Scene first, escalate to Hunt once an officer reaches the body / the killer is also seen).",
-                new MelonLoader.Preferences.ValueRange<int>(0, 2));
+            _witnessCallsPolice = Create("WitnessCallsPolice", true, "Witness phones the police (call window)",
+                "ON (default): a civilian witness pulls out their phone and calls the police over ~4 seconds (the game's own " +
+                "call animation, with a progress icon over their head). Knock them out or kill them before the call connects " +
+                "to stop it - that is your chance to silence the only witness. OFF: the police are alerted instantly. " +
+                "(A police officer who finds a body always reports it instantly - you cannot phone-block a cop.)");
             _requirePlayerSeen = Create("RequirePlayerAlsoSeen", false, "Killer must also be seen",
                 "OFF (default): seeing the BODY is enough to start the response - hiding yourself is not enough, you must " +
                 "hide the body. ON: the discovering NPC must ALSO have the killer in sight before heat is applied (closer " +
@@ -145,23 +132,13 @@ namespace LooseEnds.Config
                 "Maps to the game's pursuit levels: 1 = Investigating, 2 = Arresting, 3 = NonLethal, 4 = Lethal. Default 1 " +
                 "(Investigating - the status named in the request).",
                 new MelonLoader.Preferences.ValueRange<int>(1, 4));
-            _raiseLawIntensity = Create("RaiseLawIntensity", false, "Also raise law intensity",
-                "ON: in addition to the pursuit level, nudge the global law-enforcement intensity so more police respond. " +
-                "OFF (default): only set the pursuit level. (Used as a fallback if a dispatch no-ops at zero heat.)");
-            _useSetPursuitLevel = Create("UseSetPursuitLevel", true, "Use SetPursuitLevel",
-                "Apply the pursuit level directly on the killer (the in-game 'Investigating' status). Leave ON.");
-            _usePoliceCalled = Create("UsePoliceCalled", true, "Use PoliceCalled dispatch",
-                "Route through the game's LawManager.PoliceCalled (spawns/redirects officers with a DeadlyAssault crime). " +
-                "Leave ON. (Both this and SetPursuitLevel are independent so the effective behavior can be tuned.)");
-            _useCitizenCallAnim = Create("UseCitizenCallAnimation", false, "Citizen plays 'call police' animation",
-                "OFF (default): a discovering civilian just triggers the police response. ON (immersive, riskier): drive the " +
-                "discoverer's call-police behaviour so they visibly pull out a phone first.");
             _oncePerCorpse = Create("OncePerCorpse", true, "Respond only once per corpse",
                 "ON (default): a corpse that has already triggered a response will not trigger again. OFF: re-trigger is " +
                 "allowed, subject to the response cooldown.");
-            _responseCooldown = Create("ResponseCooldownSeconds", 60f, "Response cooldown (s)",
-                "Minimum seconds between dispatches (anti-spam), and the per-corpse re-trigger gap when 'Respond only once " +
-                "per corpse' is OFF. Clamped 5-600.",
+            _responseCooldown = Create("ResponseCooldownSeconds", 60f, "Re-trigger cooldown (s)",
+                "Per-corpse re-trigger gap used ONLY when 'Respond only once per corpse' is OFF (how long before the same " +
+                "body can raise a fresh response). It does NOT throttle different bodies - every body a witness sees gets " +
+                "its own response. Clamped 5-600.",
                 new MelonLoader.Preferences.ValueRange<float>(5f, 600f));
             _attributeUnknownToLocal = Create("AttributeUnknownToLocalPlayer", true, "Blame local player when killer unknown",
                 "ON (default, single-player): if a discovered corpse has no recorded killer, attribute it to the local " +
@@ -169,22 +146,20 @@ namespace LooseEnds.Config
                 "back to a scene response instead of blaming a random player).");
 
             // ----- weight -----
-            _weightMultiplier = Create("CorpseWeightMultiplier", 5f, "Carried corpse weight x",
-                "How heavy a carried corpse feels (default 5). Primarily slows you down while carrying a body (x5 ~ half " +
-                "speed, x10 ~ a third, floored so you can always crawl) and makes the body drag more sluggishly. " +
+            _weightMultiplier = Create("CorpseWeightMultiplier", 5f, "Dragged body weight x",
+                "How heavy a dragged body (dead OR knocked-out) feels to pull. Higher = the body resists more - it lags " +
+                "behind the carry point and drags sluggishly (and is heavier to throw). Does NOT slow the player. " +
                 "1 = vanilla. Clamped 1-20.",
                 new MelonLoader.Preferences.ValueRange<float>(1f, 20f));
-            _weightMode = Create("WeightMode", (int)WeightMode.DragForce, "Weight mode (0 DragForce, 1 Mass, 2 Both)",
-                "Secondary drag-physics tweak on the body itself (the carry slowdown applies regardless). 0 = DragForce " +
-                "(body lags behind, safest). 1 = Rigidbody mass (affects throw/collisions; the drag spring is " +
-                "mass-independent). 2 = both.",
-                new MelonLoader.Preferences.ValueRange<int>(0, 2));
 
 #if DEBUG
             _btnForceDiscover = Create("ForceDiscoverNearest", false, "> Force-discover nearest corpse (one-shot)",
                 "Toggle ON to immediately run the response on the nearest corpse, bypassing line-of-sight and delay. Auto-resets.");
             _btnSpawnTestCorpse = Create("SpawnTestCorpse", false, "> Spawn test corpse (one-shot)",
                 "Toggle ON to produce a throwaway corpse near you to witness. Auto-resets.");
+            _btnGiveArsenal = Create("GiveWeaponArsenal", false, "> Give weapon arsenal (one-shot)",
+                "Toggle ON (or press F8) to drop a set of weapons into your inventory - for testing the 'silence the " +
+                "witness mid-call' flow (you need a weapon to KO/kill the caller during their ~4s phone call). Auto-resets.");
             _logWitnessScan = Create("LogWitnessScan", false, "Debug: log witness scans",
                 "Verbose per-scan log of tracked corpses, culled observers, sightings and dispatches.");
             _forcePursuitLevel = Create("ForcePursuitLevel", 0, "Debug: force pursuit level (0 = off)",
@@ -214,11 +189,13 @@ namespace LooseEnds.Config
         internal static float DetectionRange => Mathf.Clamp(_detectionRange?.Value ?? 12f, 3f, 40f);
         internal static float ReactionDelaySeconds => Mathf.Clamp(_reactionDelay?.Value ?? 3f, 0f, 30f);
         internal static float ObserverCullRadius => Mathf.Clamp(_observerCullRadius?.Value ?? 25f, 5f, 60f);
+        internal static float BodySightRange => Mathf.Clamp(_bodySightRange?.Value ?? 12f, 4f, 30f);
+        internal static float NoticeRadius => Mathf.Clamp(_noticeRadius?.Value ?? 6f, 2f, 15f);
         internal static float ScanIntervalSeconds => Mathf.Clamp(_scanInterval?.Value ?? 0.4f, 0.1f, 2f);
         internal static int MaxRaycastsPerScan => Mathf.Clamp(_maxRaycastsPerScan?.Value ?? 64, 8, 256);
         internal static bool ReactToKnockedOut => _reactToKnockedOut?.Value ?? false;
 
-        internal static ResponseMode Mode => (ResponseMode)Mathf.Clamp(_responseMode?.Value ?? 0, 0, 2);
+        internal static bool WitnessCallsPolice => _witnessCallsPolice?.Value ?? true;
         internal static bool RequirePlayerAlsoSeen => _requirePlayerSeen?.Value ?? false;
         /// <summary>Configured pursuit level as a raw int (1-4). The dispatcher casts it to the game enum.</summary>
         internal static int PursuitLevelInt
@@ -232,22 +209,18 @@ namespace LooseEnds.Config
                 return Mathf.Clamp(_pursuitLevel?.Value ?? 1, 1, 4);
             }
         }
-        internal static bool RaiseLawIntensity => _raiseLawIntensity?.Value ?? false;
-        internal static bool UseSetPursuitLevel => _useSetPursuitLevel?.Value ?? true;
-        internal static bool UsePoliceCalled => _usePoliceCalled?.Value ?? true;
-        internal static bool UseCitizenCallAnimation => _useCitizenCallAnim?.Value ?? false;
         internal static bool OncePerCorpse => _oncePerCorpse?.Value ?? true;
         internal static float ResponseCooldownSeconds => Mathf.Clamp(_responseCooldown?.Value ?? 60f, 5f, 600f);
         internal static bool AttributeUnknownToLocalPlayer => _attributeUnknownToLocal?.Value ?? true;
 
         internal static float CorpseWeightMultiplier => Mathf.Clamp(_weightMultiplier?.Value ?? 5f, 1f, 20f);
-        internal static WeightMode Weight => (WeightMode)Mathf.Clamp(_weightMode?.Value ?? 0, 0, 2);
 
 #if DEBUG
         internal static bool LogWitnessScan => _logWitnessScan?.Value ?? false;
 
         internal static bool ConsumeForceDiscover() => Consume(_btnForceDiscover);
         internal static bool ConsumeSpawnTestCorpse() => Consume(_btnSpawnTestCorpse);
+        internal static bool ConsumeGiveArsenal() => Consume(_btnGiveArsenal);
 
         private static bool Consume(MelonPreferences_Entry<bool> entry)
         {

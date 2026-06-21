@@ -1,3 +1,5 @@
+using UnityEngine;
+
 namespace LooseEnds.Detection
 {
     /// <summary>
@@ -22,5 +24,18 @@ namespace LooseEnds.Detection
         /// <summary>The police response has fired for this body.</summary>
         public bool Dispatched;
         public float DispatchedTime;
+
+        // ----- call state (witness phoning the police: native CallPoliceBehaviour, interruptible 4s window) -----
+        /// <summary>The discoverer is on the phone calling the police; silence them before it connects to stop it.</summary>
+        public bool Calling;
+        public float CallStartTime;
+        /// <summary>The call behaviour actually became active (phone genuinely out) at least once during this attempt.</summary>
+        public bool CallWasActive;
+        /// <summary>Earliest time a fresh call attempt may start, after one stalled (witness was occupied).</summary>
+        public float CallRetryAfter;
+        /// <summary>The suspect the in-progress call targets (captured at call start).</summary>
+        public Player CallKiller;
+        /// <summary>Where the body rested when the call started - officers are redirected here once the call connects.</summary>
+        public Vector3 ScenePos;
     }
 }

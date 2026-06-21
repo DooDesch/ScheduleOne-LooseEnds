@@ -18,6 +18,13 @@ namespace LooseEnds.Detection
     {
         private static int _observerCursor;
 
+#if DEBUG
+        // Live stats surfaced by the debug HUD (last scan pass).
+        internal static int LastChecks;
+        internal static int LastFound;
+        internal static float LastScanTime;
+#endif
+
         /// <summary>
         /// Runs one throttled scan. Any corpse seen this pass is latched (Discovered) and appended to
         /// <paramref name="newlyDiscovered"/> for the dispatcher. Caller clears the list ownership.
@@ -35,9 +42,9 @@ namespace LooseEnds.Detection
             bool requireLos = Preferences.RequireLineOfSight;
             bool useVisionRange = Preferences.UseVisionConeRange;
             float explicitRange = Preferences.DetectionRange;
-            float cullSqr = useVisionRange
-                ? Preferences.ObserverCullRadius * Preferences.ObserverCullRadius
-                : explicitRange * explicitRange;
+            // Cull observers beyond the relevant radius, but never tighter than the close-range notice radius.
+            float cull = Mathf.Max(useVisionRange ? Preferences.ObserverCullRadius : explicitRange, Preferences.NoticeRadius);
+            float cullSqr = cull * cull;
             int maxChecks = Preferences.MaxRaycastsPerScan;
             int checksUsed = 0;
 #if DEBUG
@@ -85,7 +92,7 @@ namespace LooseEnds.Detection
                     if (dsq > cullSqr) continue;
 
                     checksUsed++;
-                    bool seen = CanSee(obs, corpsePos, requireLos);
+                    bool seen = CanSee(obs, corpse, corpsePos, requireLos);
 #if DEBUG
                     if (dsq < diagMinSqr) { diagMinSqr = dsq; diagMinSight = seen; }
 #endif
@@ -109,6 +116,9 @@ namespace LooseEnds.Detection
 
             AdvanceCursor(checksUsed, regCount);
 #if DEBUG
+            LastChecks = checksUsed;
+            LastFound = newlyDiscovered.Count;
+            LastScanTime = Time.time;
             if (Preferences.LogWitnessScan)
                 Core.LogDebug($"[Witness] scan: corpses={CorpseTracker.Count} undiscovered-scanned={corpsesScanned} checks={checksUsed} found={newlyDiscovered.Count}");
 #endif
@@ -141,25 +151,104 @@ namespace LooseEnds.Detection
             return npc.transform.position + Vector3.up * 0.5f;
         }
 
-        private static bool CanSee(NPC observer, Vector3 corpsePos, bool requireLos)
+        private const float EyeHeight = 1.6f;
+
+        private static bool CanSee(NPC observer, NPC corpse, Vector3 bodyPos, bool requireLos)
         {
             if (!requireLos)
             {
-                return true;   // already within the configured radius (pre-cull passed)
+                return true;   // radius-only mode (pre-cull already passed)
             }
 
-            // Reuse the NPC's own vision cone: FOV + range + occlusion (the layers that make a hidden body unseen).
+            NPCAwareness aw;
+            try { aw = observer.Awareness; } catch { return false; }
+            VisionCone cone = aw != null ? aw.VisionCone : null;
+
+            Vector3 eye = EyeOf(observer, cone);
+            float dist = (eye - bodyPos).magnitude;
+
+            // 1) The NPC's own vision cone (FOV + occlusion), but only within a believable body-notice range. A body
+            //    lying flat on the ground is far less conspicuous than a standing person, so we cap the cone test well
+            //    below the NPC's full standing sight range - otherwise a corpse in the open is spotted by anyone within
+            //    ~25m and the response feels instant with "nobody around".
+            if (dist <= Preferences.BodySightRange)
+            {
+                try { if (cone != null && cone.IsPointWithinSight(bodyPos, false, null)) return true; }
+                catch { /* fall through to the close-range notice */ }
+            }
+
+            // 2) Close-range notice. NPCs never look down at their own feet, so a body lying flat right next to them is
+            //    below the forward vision cone - which is why cops walk straight over a corpse. If a living NPC is within
+            //    the notice radius with a clear line of sight, they notice it. Occlusion is delegated to the game's own
+            //    visibility solver (EntityVisibility), so a body in a dumpster / behind a wall stays hidden.
             try
             {
-                NPCAwareness aw = observer.Awareness;
-                VisionCone cone = aw != null ? aw.VisionCone : null;
-                if (cone != null)
+                float r = Preferences.NoticeRadius;
+                if (dist <= r && BodyExposedTo(corpse, observer, eye, r, bodyPos, cone))
+                    return true;
+            }
+            catch { /* ignore */ }
+
+            return false;
+        }
+
+        // Minimum fraction of the body's visibility points that must be clear for a close-range notice. The game's
+        // EntityVisibility treats "VisionObscurer" cover (bushes / props) as PARTIAL - it still returns a small nonzero
+        // exposure - so a bare > 0 would notice a body fully tucked behind a dumpster. A threshold keeps "hide the body"
+        // intact: a body must be meaningfully exposed, not just a sliver through cover.
+        private const float NoticeExposureThreshold = 0.4f;
+
+        /// <summary>
+        /// True if the corpse has a clear enough line of sight to the observer's eye at close range. Prefers the game's
+        /// own <see cref="EntityVisibility.CalculateExposureToPoint"/> (correct self + observer exclusion, partial-cover
+        /// handling) and falls back to a manual occlusion ray if the body has no visibility component.
+        /// </summary>
+        private static bool BodyExposedTo(NPC corpse, NPC observer, Vector3 eye, float range, Vector3 bodyPos, VisionCone cone)
+        {
+            try
+            {
+                EntityVisibility vis = corpse != null ? corpse.Visibility : null;
+                if (vis != null)
                 {
-                    return cone.IsPointWithinSight(corpsePos, false, null);
+                    // checkRange is measured from the body's transform to the eye; pad it so the ragdoll-vs-root offset
+                    // never trips the helper's distance early-out for a body that is genuinely within the notice radius.
+                    float exposure = vis.CalculateExposureToPoint(eye, range + 3f, observer);
+                    return exposure >= NoticeExposureThreshold;
                 }
             }
-            catch { /* no usable cone -> cannot confirm sight */ }
-            return false;
+            catch { /* fall through to the manual ray */ }
+            return HasClearPath(eye, bodyPos, cone);
+        }
+
+        private static Vector3 EyeOf(NPC observer, VisionCone cone)
+        {
+            try { if (cone != null && cone.VisionOrigin != null) return cone.VisionOrigin.position; } catch { }
+            return observer.transform.position + Vector3.up * EyeHeight;
+        }
+
+        /// <summary>
+        /// True if no occluder blocks the segment eye-&gt;body. The body's own collider at the far end is excluded by
+        /// stopping the cast a little short, so a body is never its own blocker. If no occluder layer mask is available
+        /// this returns true (proximity-only) - better to notice a body at your feet than to miss it.
+        /// </summary>
+        private static bool HasClearPath(Vector3 eye, Vector3 bodyPos, VisionCone cone)
+        {
+            Vector3 dir = bodyPos - eye;
+            float dist = dir.magnitude;
+            if (dist <= 0.6f) return true;   // basically on top of it
+            dir /= dist;
+            float castDist = dist - 0.5f;    // stop short so the body itself is not counted as the blocker
+            try
+            {
+                if (cone != null)
+                {
+                    LayerMask mask = cone.VisibilityBlockingLayers;
+                    if (mask.value != 0)
+                        return !Physics.Raycast(eye, dir, castDist, mask.value);
+                }
+            }
+            catch { /* fall through */ }
+            return true;
         }
 
         private static bool RoleEnabled(NPC obs)
