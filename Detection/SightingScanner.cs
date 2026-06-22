@@ -5,6 +5,9 @@ using Il2CppScheduleOne.Employees;    // Employee
 using Il2CppScheduleOne.Police;       // PoliceOfficer
 using Il2CppScheduleOne.Vision;       // VisionCone
 using LooseEnds.Config;
+#if SNITCH
+using Snitch.Api;                 // Profiler sub-section timing + ablation flag (Debug + EnableSnitch only)
+#endif
 
 namespace LooseEnds.Detection
 {
@@ -21,6 +24,11 @@ namespace LooseEnds.Detection
         // Sight-test count of the last scan pass. Always tracked (one int assignment) so the optional Snitch
         // profiler can surface it as a counter without coupling to DEBUG.
         internal static int LastChecks;
+#if SNITCH
+        // Snitch ablation lever 'looseends.scan': when set, Scan() returns immediately so the profiler can measure
+        // the causal cost of the whole sighting pipeline (incl. the engine's native vision raycasts). Debug only.
+        internal static bool ScanDisabled;
+#endif
 #if DEBUG
         // Extra live stats surfaced by the debug HUD (last scan pass).
         internal static int LastFound;
@@ -34,6 +42,9 @@ namespace LooseEnds.Detection
         internal static void Scan(List<CorpseRecord> newlyDiscovered)
         {
             newlyDiscovered.Clear();
+#if SNITCH
+            if (ScanDisabled) return;   // ablation lever 'looseends.scan': skip the sighting pipeline
+#endif
 
             var reg = NPCManager.NPCRegistry;
             if (reg == null) return;
@@ -94,7 +105,15 @@ namespace LooseEnds.Detection
                     if (dsq > cullSqr) continue;
 
                     checksUsed++;
+                    // Snitch (Debug): time ONLY the vision-cone / occlusion-ray test, so the distance pre-cull cost
+                    // is recoverable as (LooseEnds.Scan - LooseEnds.Scan.Sight).
+#if SNITCH
+                    bool seen;
+                    using (Profiler.Sample("LooseEnds.Scan.Sight"))
+                        seen = CanSee(obs, corpse, corpsePos, requireLos);
+#else
                     bool seen = CanSee(obs, corpse, corpsePos, requireLos);
+#endif
 #if DEBUG
                     if (dsq < diagMinSqr) { diagMinSqr = dsq; diagMinSight = seen; }
 #endif

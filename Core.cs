@@ -6,6 +6,9 @@ using LooseEnds.Detection;
 using LooseEnds.Killer;
 using LooseEnds.Networking;
 using LooseEnds.Reaction;
+#if SNITCH
+using Snitch.Api;                 // Profiler section timing (Debug + EnableSnitch only; no-op when host absent)
+#endif
 
 [assembly: MelonInfo(typeof(LooseEnds.Core), "Loose Ends", "1.1.0", "DooDesch", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -183,7 +186,11 @@ namespace LooseEnds
             if (_reconcileAccum >= 2f)
             {
                 _reconcileAccum = 0f;
+#if SNITCH
+                using (Profiler.Sample("LooseEnds.Reconcile")) CorpseTracker.Reconcile();
+#else
                 CorpseTracker.Reconcile();
+#endif
             }
 
             // The big perf lever: with no corpses in the world, do nothing else.
@@ -201,7 +208,11 @@ namespace LooseEnds
             }
             _scanAccum = 0f;
 
+#if SNITCH
+            using (Profiler.Sample("LooseEnds.WitnessTick")) WitnessTick();
+#else
             WitnessTick();
+#endif
         }
 
         /// <summary>
@@ -239,7 +250,11 @@ namespace LooseEnds
         private void WitnessTick()
         {
             // 1) find new sightings (latches Discovered on the corpse records).
+#if SNITCH
+            using (Profiler.Sample("LooseEnds.Scan")) SightingScanner.Scan(_discovered);
+#else
             SightingScanner.Scan(_discovered);
+#endif
 
             // 2) fire reactions for corpses whose reaction delay has elapsed; re-arm re-triggers when allowed.
             float now = Time.time;

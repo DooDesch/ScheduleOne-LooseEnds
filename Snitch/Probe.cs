@@ -34,6 +34,14 @@ namespace LooseEnds.Profiling
                     .Add("dispatched", dispatched)
                     .Add("carried", CorpseWeight.ActiveCount);
             });
+
+            // ----- ablation lever ('snitch ablate looseends.scan') -----
+            // Causal cost of the whole sighting pipeline (the distance pre-cull loop + the engine's native vision-cone
+            // / occlusion raycasts). Host-only by construction - the witness system already runs only on the server,
+            // so this is a no-op on a connected client. Run it with at least one corpse present (the only costly state).
+            Profiler.RegisterAblationLever("looseends.scan",
+                apply: () => SightingScanner.ScanDisabled = true,
+                restore: () => SightingScanner.ScanDisabled = false);
         }
     }
 }
