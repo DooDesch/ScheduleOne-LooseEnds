@@ -18,9 +18,11 @@ namespace LooseEnds.Detection
     {
         private static int _observerCursor;
 
-#if DEBUG
-        // Live stats surfaced by the debug HUD (last scan pass).
+        // Sight-test count of the last scan pass. Always tracked (one int assignment) so the optional Snitch
+        // profiler can surface it as a counter without coupling to DEBUG.
         internal static int LastChecks;
+#if DEBUG
+        // Extra live stats surfaced by the debug HUD (last scan pass).
         internal static int LastFound;
         internal static float LastScanTime;
 #endif
@@ -115,8 +117,8 @@ namespace LooseEnds.Detection
             }
 
             AdvanceCursor(checksUsed, regCount);
-#if DEBUG
             LastChecks = checksUsed;
+#if DEBUG
             LastFound = newlyDiscovered.Count;
             LastScanTime = Time.time;
             if (Preferences.LogWitnessScan)
