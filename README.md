@@ -108,7 +108,7 @@ dotnet build -c Release   # release build: all dev surface compiled out
 
 The post-build step copies the DLL to `Mods/` (path set by `ModsDirectory` in the csproj).
 
-## Verifying in-game (Phase 0 checklist)
+## Verifying in-game
 
 A few behaviours are best confirmed live in your own save. Build **Debug**, load a save, then:
 
