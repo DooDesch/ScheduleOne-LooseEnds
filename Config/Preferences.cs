@@ -158,8 +158,9 @@ namespace LooseEnds.Config
             _btnSpawnTestCorpse = Create("SpawnTestCorpse", false, "> Spawn test corpse (one-shot)",
                 "Toggle ON to produce a throwaway corpse near you to witness. Auto-resets.");
             _btnGiveArsenal = Create("GiveWeaponArsenal", false, "> Give weapon arsenal (one-shot)",
-                "Toggle ON (or press F8) to drop a set of weapons into your inventory - for testing the 'silence the " +
-                "witness mid-call' flow (you need a weapon to KO/kill the caller during their ~4s phone call). Auto-resets.");
+                "Toggle ON (or use the Snitch panel 'Give Arsenal' action) to drop a set of weapons into your inventory - " +
+                "for testing the 'silence the witness mid-call' flow (you need a weapon to KO/kill the caller during their " +
+                "~4s phone call). Auto-resets.");
             _logWitnessScan = Create("LogWitnessScan", false, "Debug: log witness scans",
                 "Verbose per-scan log of tracked corpses, culled observers, sightings and dispatches.");
             _forcePursuitLevel = Create("ForcePursuitLevel", 0, "Debug: force pursuit level (0 = off)",

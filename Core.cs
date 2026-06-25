@@ -113,25 +113,13 @@ namespace LooseEnds
             ResetState();
         }
 
-#if DEBUG
-        public override void OnGUI()
-        {
-            if (!_inWorld) return;
-            Debugging.WitnessHud.Draw();
-        }
-#endif
+        /// <summary>Short human-readable activation state, surfaced by the Snitch panel (Debug only).</summary>
+        internal static string WitnessStatus = "init";
 
         /// <summary>
         /// Decides whether the witness system should be doing work this frame, honoring the master switch, the
         /// host-authority requirement (server only) and the co-op safety posture. Logs each state transition once.
         /// </summary>
-        /// <summary>Short human-readable activation state, surfaced by the debug HUD.</summary>
-        internal static string WitnessStatus = "init";
-#if DEBUG
-        /// <summary>Debug HUD on/off (toggle with F7).</summary>
-        internal static bool HudVisible = true;
-#endif
-
         private bool WitnessActive()
         {
             if (!Preferences.Enabled)
@@ -167,8 +155,6 @@ namespace LooseEnds
 
 #if DEBUG
             HandleDebugCommands();
-            try { if (Input.GetKeyDown(KeyCode.F7)) HudVisible = !HudVisible; } catch { }
-            try { if (Input.GetKeyDown(KeyCode.F8)) Debugging.DebugArsenal.Give(); } catch { }
 #endif
 
             // Arrest watcher (server only): one arrest settles the whole spree - clear killer attribution for all bodies.
@@ -239,6 +225,9 @@ namespace LooseEnds
                     KillerRegistry.Clear();
                     CorpseTracker.ResolveAll();
                     Log?.Msg("[Core] Player arrested - cleared killer attribution for all bodies.");
+#if SNITCH
+                    Profiler.Log("LooseEnds", "Player arrested - cleared killer attribution for all bodies.");
+#endif
                 }
 
                 _prevMinsSinceArrested = mins;

@@ -8,6 +8,9 @@ using Il2CppScheduleOne.NPCs.Behaviour;  // CallPoliceBehaviour
 using LooseEnds.Config;
 using LooseEnds.Detection;
 using LooseEnds.Networking;
+#if SNITCH
+using Snitch.Api;                 // Profiler.Log -> the "LooseEnds" panel log channel (Debug + EnableSnitch only)
+#endif
 
 namespace LooseEnds.Reaction
 {
@@ -109,6 +112,9 @@ namespace LooseEnds.Reaction
                 rec.CallKiller = killer;
                 rec.ScenePos = bodyPos;
                 Core.Log?.Msg($"[Reaction] witness {SafeId(witness)} CALLING police on {SafeCode(killer)} for corpse={rec.Id} - {CallWindowSeconds:F0}s window (silence them to stop it).");
+#if SNITCH
+                Profiler.Log("LooseEnds", $"CALLING police on {SafeCode(killer)} for corpse={rec.Id} ({CallWindowSeconds:F0}s window).");
+#endif
                 return true;
             }
             catch (Exception e)
@@ -149,6 +155,9 @@ namespace LooseEnds.Reaction
                 rec.Dispatched = true;
                 rec.DispatchedTime = now;
                 Core.Log?.Msg($"[Reaction] call CONNECTED for corpse={rec.Id} - officers sent to the scene ({rec.ScenePos.x:F1},{rec.ScenePos.y:F1},{rec.ScenePos.z:F1}).");
+#if SNITCH
+                Profiler.Log("LooseEnds", $"call CONNECTED for corpse={rec.Id} - officers sent to the scene.");
+#endif
                 return;
             }
 
@@ -161,6 +170,9 @@ namespace LooseEnds.Reaction
                 rec.Discovered = false;     // re-arm: the scanner can re-discover this body
                 rec.Discoverer = null;
                 Core.Log?.Msg($"[Reaction] witness SILENCED before the call connected for corpse={rec.Id} - no police called.");
+#if SNITCH
+                Profiler.Log("LooseEnds", $"witness SILENCED for corpse={rec.Id} - no police called.");
+#endif
                 return;
             }
 
@@ -301,6 +313,9 @@ namespace LooseEnds.Reaction
             catch (Exception e) { Core.Log?.Warning("[Reaction] LastKnownPosition redirect failed: " + e.Message); }
 
             Core.Log?.Msg($"[Reaction] SCENE corpse={rec.Id} suspect={SafeCode(killer)} pursuit={(int)level} body=({bodyPos.x:F1},{bodyPos.y:F1},{bodyPos.z:F1})");
+#if SNITCH
+            Profiler.Log("LooseEnds", $"SCENE dispatch for corpse={rec.Id} suspect={SafeCode(killer)} pursuit={(int)level}.");
+#endif
         }
 
         /// <summary>Where the body actually rests - prefer the ragdoll's draggable transform over the NPC root.</summary>

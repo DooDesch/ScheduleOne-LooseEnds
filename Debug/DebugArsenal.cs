@@ -8,8 +8,8 @@ using Reg = Il2CppScheduleOne.Registry;    // Registry.GetItem (qualified to avo
 namespace LooseEnds.Debugging
 {
     /// <summary>
-    /// DEBUG-only test helper (F8, or the one-shot config button): drops a weapon arsenal straight into the player's
-    /// inventory. It exists to test the witness "silence the caller" flow - you need a weapon to knock out or kill a
+    /// DEBUG-only test helper (the one-shot config button, or the Snitch panel "Give Arsenal" action): drops a weapon
+    /// arsenal straight into the player's inventory. It exists to test the witness "silence the caller" flow - you need a weapon to knock out or kill a
     /// witness during their ~4s phone call. The real weapon item IDs live in Unity assets (not in code), so this is
     /// self-discovering: it walks a broad candidate ID list and adds whichever the game's item Registry actually
     /// resolves, logging the rest so the list can be refined. Compiled out of Release entirely.
